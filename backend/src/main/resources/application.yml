@@ -1,0 +1,12 @@
+server:
+  error:
+    include-message: never
+
+llm:
+  mode: ${LLM_MODE:mock}
+  base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+  api-key: ${LLM_API_KEY:}
+  model: ${LLM_MODEL:deepseek-chat}
+  json-mode: ${LLM_JSON_MODE:true}
+  connect-timeout-seconds: ${LLM_CONNECT_TIMEOUT_SECONDS:10}
+  read-timeout-seconds: ${LLM_READ_TIMEOUT_SECONDS:60}
