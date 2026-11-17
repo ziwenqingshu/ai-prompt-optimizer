@@ -3,6 +3,7 @@ package com.qinzhi.promptoptimizer.api;
 import com.qinzhi.promptoptimizer.service.LlmNotConfiguredException;
 import com.qinzhi.promptoptimizer.service.LlmTimeoutException;
 import com.qinzhi.promptoptimizer.service.LlmUnavailableException;
+import com.qinzhi.promptoptimizer.service.LlmRequestException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -13,6 +14,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> unsupportedMediaType() {
+        return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "请使用 application/json 请求格式", "VALIDATION_ERROR");
+    }
+
+    @ExceptionHandler(LlmRequestException.class)
+    public ResponseEntity<ApiError> modelRequest(LlmRequestException exception) {
+        return error(HttpStatus.BAD_GATEWAY, exception.getMessage(), exception.code());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> validation(MethodArgumentNotValidException exception) {
         FieldError fieldError = exception.getBindingResult().getFieldError();

@@ -1,6 +1,10 @@
 server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
   error:
     include-message: never
+
+app:
+  data-dir: ${APP_DATA_DIR:./data}
 
 llm:
   mode: ${LLM_MODE:mock}

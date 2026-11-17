@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.http.MediaType;
 
 @Service
 public class OptimizationService {
@@ -41,8 +43,9 @@ public class OptimizationService {
         if (properties.isMock()) {
             return mockResponse(request);
         }
-        if (properties.apiKey() == null || properties.apiKey().isBlank()) {
-            throw new LlmNotConfiguredException();
+        String configurationError = properties.configurationError();
+        if (configurationError != null) {
+            throw new LlmNotConfiguredException(configurationError);
         }
 
         ObjectNode payload = objectMapper.createObjectNode();
@@ -58,11 +61,24 @@ public class OptimizationService {
 
         try {
             JsonNode response = restClient.post()
-                    .uri(normalizeBaseUrl(properties.baseUrl()) + "/chat/completions")
-                    .headers(headers -> headers.setBearerAuth(properties.apiKey()))
+                    .uri(properties.completionUrl())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(headers -> {
+                        if (properties.apiKey() != null && !properties.apiKey().isBlank()) {
+                            headers.setBearerAuth(properties.apiKey().trim());
+                        }
+                    })
                     .body(payload)
                     .retrieve()
                     .body(JsonNode.class);
+            JsonNode choice = response == null ? objectMapper.createObjectNode() : response.path("choices").path(0);
+            if ("length".equals(choice.path("finish_reason").asText())) {
+                throw new LlmRequestException("LLM_TRUNCATED", "模型输出被截断，请缩短输入或调整服务商的输出长度限制");
+            }
+            if ("content_filter".equals(choice.path("finish_reason").asText())
+                    || !choice.path("message").path("refusal").asText("").isBlank()) {
+                throw new LlmRequestException("LLM_REFUSED", "模型拒绝了本次请求，请修改提示词后重试");
+            }
             String content = response == null ? "" : response.path("choices").path(0)
                     .path("message").path("content").asText("").trim();
             if (content.isBlank()) {
@@ -70,20 +86,42 @@ public class OptimizationService {
             }
             return outputParser.parse(content, properties.model(), "LIVE");
         } catch (RestClientResponseException exception) {
-            throw new LlmUnavailableException();
+            throw switch (exception.getStatusCode().value()) {
+                case 401, 403 -> new LlmRequestException("LLM_AUTH_ERROR", "模型鉴权失败，请检查 API Key 和模型访问权限");
+                case 402 -> new LlmRequestException("LLM_BALANCE_ERROR", "模型服务余额不足，请检查服务商账户额度");
+                case 404 -> new LlmRequestException("LLM_MODEL_NOT_FOUND", "模型或接口不存在，请检查 LLM_MODEL 和 LLM_BASE_URL");
+                case 429 -> new LlmRequestException("LLM_RATE_LIMIT", "模型服务限流或额度耗尽，请稍后重试并检查额度");
+                case 400, 422 -> new LlmRequestException("LLM_BAD_REQUEST", "模型不接受当前参数，请检查模型名；若不支持 JSON 模式，设置 LLM_JSON_MODE=false 后重启");
+                default -> new LlmRequestException("LLM_UPSTREAM_ERROR", "模型服务暂时不可用，请稍后重试");
+            };
         } catch (ResourceAccessException exception) {
             if (isTimeout(exception)) {
                 throw new LlmTimeoutException();
             }
             throw new LlmUnavailableException();
+        } catch (RestClientException exception) {
+            if (isTimeout(exception)) throw new LlmTimeoutException();
+            throw new LlmRequestException("LLM_INVALID_RESPONSE", "模型接口未返回有效响应，请检查接口地址和服务商兼容性");
         }
     }
 
     private OptimizeResponse mockResponse(OptimizeRequest request) {
-        String optimizedPrompt = "你是一名" + request.scene().name() + "场景专家。请以"
-                + request.style().name() + "风格处理以下任务：\n\n"
-                + request.originalPrompt().trim()
-                + "\n\n请先确认目标、约束和输出格式，再给出结果。";
+        String role = switch (request.scene()) {
+            case SUMMARY -> "擅长提炼核心观点的文本总结专家";
+            case CODE -> "重视可运行性与边界条件的软件工程师";
+            case RESUME -> "重视真实经历与岗位匹配度的简历顾问";
+            case GENERAL -> "擅长澄清目标与约束的专业助手";
+        };
+        String style = switch (request.style()) {
+            case CONCISE -> "简洁、直击要点";
+            case PROFESSIONAL -> "严谨、专业、可执行";
+            case DETAILED -> "结构清晰、细节充分";
+        };
+        String optimizedPrompt = "角色与表达\n你是一位" + role + "，请保持" + style + "的表达。\n\n"
+                + "任务\n" + request.originalPrompt().trim()
+                + "\n\n工作要求\n1. 明确任务目标和已有信息；缺少必要信息时先提出问题。"
+                + "\n2. 遵守给定约束，不编造事实或数据。"
+                + "\n3. 使用清晰的标题或列表组织输出，并给出可检查的完成标准。";
         return new OptimizeResponse(optimizedPrompt, java.util.List.of(
                 "明确任务目标与使用场景。",
                 "补充输入信息、限制条件和禁止项。",
@@ -91,12 +129,9 @@ public class OptimizationService {
         ), properties.model(), "MOCK", false);
     }
 
-    private String normalizeBaseUrl(String baseUrl) {
-        return baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
-    }
-
     private boolean isTimeout(Throwable exception) {
         for (Throwable current = exception; current != null; current = current.getCause()) {
+            if (current instanceof java.net.SocketTimeoutException) return true;
             String message = current.getMessage();
             if (message != null && message.toLowerCase().contains("timed out")) {
                 return true;

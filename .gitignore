@@ -1,7 +1,13 @@
 .env
 backend/target/
+data/
+backend/data/
+backups/
 frontend/node_modules/
 frontend/dist/
 .idea/
 .vscode/
 *.log
+frontend/test-results/
+frontend/playwright-report/
+__pycache__/

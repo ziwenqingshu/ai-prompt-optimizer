@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend --no-audit --no-fund
+
+      - name: Audit production dependencies
+        run: npm audit --prefix frontend --omit=dev
+
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+      - name: Test backend
+        run: mvn -B test --file backend/pom.xml
+
+      - name: Validate local scripts
+        run: bash -n scripts/run-local.sh scripts/smoke-test.sh scripts/backup-history.sh
+
+      - name: Test environment loader
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Install test browser
+        working-directory: frontend
+        run: npx playwright install --with-deps --no-shell chromium
+
+      - name: Test complete browser workflow
+        run: npm run test:e2e --prefix frontend
